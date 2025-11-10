@@ -1,12 +1,10 @@
-# backend/processor.py
-
 import numpy as np
 import mido
 import os
 from scipy.io import wavfile
 import librosa
 import subprocess
-import shutil 
+import shutil
 
 def analyze_sound(sound_path):
     try:
@@ -98,23 +96,23 @@ def run_processing(midi_file_path, config_data, sound_folder_path, progress_call
             
             num_layers = len(chosen_sounds) - 1
             for sound_idx, sound_data in enumerate(chosen_sounds):
-                
                 pitch_ratio = note['pitch_hz'] / sound_data['base_pitch_hz']
                 duration_ratio = sound_data['base_duration_sec'] / note['duration_sec'] if note['duration_sec'] > 0 else 1
-                
                 tempo_factor = duration_ratio * pitch_ratio
-
                 input_path = sound_data['path']
                 output_path = os.path.join(temp_notes_dir, f"note_{i}_sound_{sound_idx}.wav")
 
+                
                 command = [
                     'ffmpeg',
-                    '-y',  
+                    '-y',
                     '-i', input_path,
                     '-af', f'asetrate={sound_data["sr"] * pitch_ratio},atempo={tempo_factor}',
                     '-ar', str(sample_rate),
+                    '-ac', '1',  
                     output_path
                 ]
+                
                 
                 subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
