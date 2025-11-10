@@ -10,14 +10,11 @@ def analyze_sound_fast(sound_path):
     try:
         y, sr = librosa.load(sound_path, res_type='kaiser_fast')
         duration_sec = librosa.get_duration(y=y, sr=sr)
-
         stft = np.abs(librosa.stft(y))
         freqs = librosa.fft_frequencies(sr=sr)
         peak_freq_bin = np.argmax(np.mean(stft, axis=1))
         pitch_hz = freqs[peak_freq_bin]
-        
         if pitch_hz == 0: pitch_hz = 261.63
-
         return {"base_pitch_hz": pitch_hz, "base_duration_sec": duration_sec, "sr": sr}
     except Exception as e:
         print(f"Warning: Could not analyze sound {os.path.basename(sound_path)}. Error: {e}")
@@ -89,6 +86,8 @@ def run_processing(midi_file_path, config_data, sound_folder_path, progress_call
         total_duration_sec = parsed_notes[-1]['start_time'] + parsed_notes[-1]['duration_sec'] + 2.0
         master_track = np.zeros(int(total_duration_sec * sample_rate), dtype=np.float32)
 
+        note_audio_cache = {}
+
         total_notes = len(parsed_notes)
         for i, note in enumerate(parsed_notes):
             progress_callback({
@@ -100,27 +99,37 @@ def run_processing(midi_file_path, config_data, sound_folder_path, progress_call
             
             num_layers = len(chosen_sounds) - 1
             for sound_idx, sound_data in enumerate(chosen_sounds):
-                pitch_ratio = note['pitch_hz'] / sound_data['base_pitch_hz']
-                duration_ratio = sound_data['base_duration_sec'] / note['duration_sec'] if note['duration_sec'] > 0 else 1
-                tempo_factor = duration_ratio * pitch_ratio
-                input_path = sound_data['path']
-                output_path = os.path.join(temp_notes_dir, f"note_{i}_sound_{sound_idx}.wav")
+                
+                cache_key = (sound_data['filename'], note['pitch_hz'])
 
-                command = [
-                    'ffmpeg', '-y', '-i', input_path,
-                    '-af', f'asetrate={sound_data["sr"] * pitch_ratio},atempo={tempo_factor}',
-                    '-ar', str(sample_rate), '-ac', '1',
-                    output_path
-                ]
+                if cache_key in note_audio_cache:
+                    note_audio_float = note_audio_cache[cache_key]
+                else:
+                    pitch_ratio = note['pitch_hz'] / sound_data['base_pitch_hz']
+                    input_path = sound_data['path']
+                    output_path = os.path.join(temp_notes_dir, f"{sound_data['filename']}_{note['pitch_hz']:.2f}.wav")
+
+                    command = [
+                        'ffmpeg', '-y', '-i', input_path,
+                        '-af', f'asetrate={sound_data["sr"] * pitch_ratio}',
+                        '-ar', str(sample_rate), '-ac', '1',
+                        output_path
+                    ]
+                    subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    
+                    sr, note_audio = wavfile.read(output_path)
+                    note_audio_float = note_audio.astype(np.float32) / 32767.0
+                    
+                    note_audio_cache[cache_key] = note_audio_float
+
+                current_duration = len(note_audio_float) / sample_rate
+                stretch_factor = current_duration / note['duration_sec'] if note['duration_sec'] > 0 else 1
                 
-                subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                
-                sr, note_audio = wavfile.read(output_path)
-                note_audio_float = note_audio.astype(np.float32) / 32767.0
-                
+                y_stretched = librosa.effects.time_stretch(note_audio_float, rate=stretch_factor)
+
                 is_primary = sound_data['filename'] == primary_sound_name
                 volume = note['velocity'] * (1.0 if is_primary else (0.7 / num_layers if num_layers > 0 else 0.7))
-                y_final = note_audio_float * volume
+                y_final = y_stretched * volume
 
                 start_sample = int(note['start_time'] * sample_rate)
                 end_sample = start_sample + len(y_final)
