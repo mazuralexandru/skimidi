@@ -15,7 +15,9 @@ app = FastAPI()
 
 origins = [
     "http://localhost:5173",
+    "https://skimidi.netlify.app" 
 ]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
