@@ -14,10 +14,8 @@ os.makedirs("temp_processing", exist_ok=True)
 
 app = FastAPI()
 
-origins = [
-    "http://localhost:5173",
-    "https://skimidi.netlify.app"
-]
+origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -71,6 +69,7 @@ async def websocket_process(websocket: WebSocket):
             await websocket.send_json(progress_data)
 
         loop = asyncio.get_event_loop()
+        
         with ThreadPoolExecutor() as pool:
             future = loop.run_in_executor(
                 pool,
@@ -84,6 +83,7 @@ async def websocket_process(websocket: WebSocket):
             while not future.done():
                 await websocket.send_json({"status": "ping"})
                 await asyncio.sleep(10)
+        
         output_dir = future.result()
 
         if output_dir:
