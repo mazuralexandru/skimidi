@@ -7,18 +7,21 @@ import uuid
 from typing import List
 from processor import run_processing
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 os.makedirs("results", exist_ok=True)
 os.makedirs("temp_processing", exist_ok=True)
 
 app = FastAPI()
 
-origins = ["*"]
-
+origins = [
+    "http://localhost:5173",
+    "https://skimidi.netlify.app"
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,  
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -38,16 +41,13 @@ async def upload_files(
     job_folder = os.path.join("temp_processing", job_id)
     sound_folder_path = os.path.join(job_folder, "sounds")
     os.makedirs(sound_folder_path, exist_ok=True)
-
     midi_path = os.path.join(job_folder, midi.filename)
     with open(midi_path, "wb") as f:
         f.write(await midi.read())
-
     for sound_file in sounds:
         sound_path = os.path.join(sound_folder_path, sound_file.filename)
         with open(sound_path, "wb") as f:
             f.write(await sound_file.read())
-            
     return {"jobId": job_id, "midiFilename": midi.filename}
 
 @app.websocket("/ws/process")
@@ -71,14 +71,20 @@ async def websocket_process(websocket: WebSocket):
             await websocket.send_json(progress_data)
 
         loop = asyncio.get_event_loop()
-        output_dir = await loop.run_in_executor(
-            None,
-            run_processing,
-            midi_path,
-            config_data,
-            sound_folder_path,
-            lambda data: asyncio.run_coroutine_threadsafe(send_progress(data), loop)
-        )
+        with ThreadPoolExecutor() as pool:
+            future = loop.run_in_executor(
+                pool,
+                run_processing,
+                midi_path,
+                config_data,
+                sound_folder_path,
+                lambda data: asyncio.run_coroutine_threadsafe(send_progress(data), loop).result()
+            )
+            
+            while not future.done():
+                await websocket.send_json({"status": "ping"})
+                await asyncio.sleep(10)
+        output_dir = future.result()
 
         if output_dir:
             base_name = os.path.splitext(os.path.basename(midi_filename))[0]
