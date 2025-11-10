@@ -1,0 +1,104 @@
+# backend/main.py
+
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+import json
+import os
+import uuid
+from typing import List
+from processor import run_processing
+import asyncio
+
+app = FastAPI()
+
+# --- CORS MIDDLEWARE ---
+origins = ["http://localhost:5173"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.mount("/results", StaticFiles(directory="results"), name="results")
+
+@app.get("/")
+def read_root():
+    return {"message": "Skimidi API is running!"}
+
+# NEW ENDPOINT: Handles file uploads and creates a job
+@app.post("/api/upload")
+async def upload_files(
+    midi: UploadFile = File(...), 
+    sounds: List[UploadFile] = File(...)
+):
+    job_id = str(uuid.uuid4())
+    job_folder = os.path.join("temp_processing", job_id)
+    sound_folder_path = os.path.join(job_folder, "sounds")
+    os.makedirs(sound_folder_path, exist_ok=True)
+
+    # Save MIDI
+    midi_path = os.path.join(job_folder, midi.filename)
+    with open(midi_path, "wb") as f:
+        f.write(await midi.read())
+
+    # Save Sounds
+    for sound_file in sounds:
+        sound_path = os.path.join(sound_folder_path, sound_file.filename)
+        with open(sound_path, "wb") as f:
+            f.write(await sound_file.read())
+            
+    return {"jobId": job_id, "midiFilename": midi.filename}
+
+# NEW WEBSOCKET ENDPOINT: Handles the processing job
+@app.websocket("/ws/process")
+async def websocket_process(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        # Wait for the initial message from the client
+        message = await websocket.receive_json()
+        job_id = message.get("jobId")
+        config_data = message.get("config")
+        midi_filename = message.get("midiFilename")
+
+        if not all([job_id, config_data, midi_filename]):
+            await websocket.send_json({"error": "Missing job details."})
+            return
+
+        job_folder = os.path.join("temp_processing", job_id)
+        midi_path = os.path.join(job_folder, midi_filename)
+        sound_folder_path = os.path.join(job_folder, "sounds")
+
+        # Define the callback function to send progress over the websocket
+        async def send_progress(progress_data):
+            await websocket.send_json(progress_data)
+
+        # Run the synchronous, CPU-bound processing in a thread pool
+        loop = asyncio.get_event_loop()
+        output_dir = await loop.run_in_executor(
+            None,  # Use the default thread pool
+            run_processing,
+            midi_path,
+            config_data,
+            sound_folder_path,
+            lambda data: asyncio.run_coroutine_threadsafe(send_progress(data), loop)
+        )
+
+        if output_dir:
+            base_name = os.path.splitext(os.path.basename(midi_filename))[0]
+            output_filename = f"{base_name}_output.wav"
+            relative_preview_path = os.path.join("results", base_name, output_filename)
+            await websocket.send_json({"resultUrl": f"/{relative_preview_path}"})
+        else:
+            # The error is already sent by the callback in run_processing
+            pass
+
+    except WebSocketDisconnect:
+        print(f"Client disconnected.")
+    except Exception as e:
+        print(f"An error occurred in websocket: {e}")
+        await websocket.send_json({"error": str(e)})
+    finally:
+        await websocket.close()
