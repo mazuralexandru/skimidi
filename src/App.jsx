@@ -9,6 +9,8 @@ import ProgressBar from './components/ProgressBar';
 
 import './App.css';
 
+console.log("VITE_API_BASE_URL from environment:", import.meta.env.VITE_API_BASE_URL);
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
 const WS_BASE_URL = API_BASE_URL.replace(/^http/, 'ws');
 
@@ -70,6 +72,8 @@ function App() {
   };
   
   const handleProcess = async () => {
+    console.log("1. 'Process & Weave!' button clicked. handleProcess function started.");
+
     if (!midiFile) { setError("Please upload a MIDI file first."); return; }
     if (palette.length === 0) { setError("Please upload at least one sound to the palette."); return; }
     const primarySound = palette.find(s => s.id === primarySoundId);
@@ -84,11 +88,16 @@ function App() {
     formData.append('midi', midiFile);
     palette.forEach(sound => formData.append('sounds', sound.file));
 
+    console.log("2. FormData prepared. About to start fetch to upload files.");
+    console.log("   API URL for upload:", `${API_BASE_URL}/api/upload`);
+
     try {
       const uploadResponse = await fetch(`${API_BASE_URL}/api/upload`, {
         method: 'POST',
         body: formData,
       });
+
+      console.log("3. Fetch call completed. Response status:", uploadResponse.status);
 
       if (!uploadResponse.ok) {
         const errorData = await uploadResponse.json();
@@ -98,10 +107,14 @@ function App() {
       const uploadResult = await uploadResponse.json();
       const { jobId, midiFilename } = uploadResult;
 
+      console.log("4. Upload successful. Job ID:", jobId);
+      console.log("   WebSocket URL:", `${WS_BASE_URL}/ws/process`);
+
       const socket = new WebSocket(`${WS_BASE_URL}/ws/process`);
       socketRef.current = socket;
 
       socket.onopen = () => {
+        console.log("5. WebSocket connection opened successfully.");
         setProgress({ status: 'Connecting to weaver...', percent: 0 });
         const config = { 
           layering: { max_layers: layering },
@@ -109,11 +122,12 @@ function App() {
           ticksPerSecond: ticksPerSecond
         };
         socket.send(JSON.stringify({ jobId, midiFilename, config }));
+        console.log("6. Sent job details to WebSocket.");
       };
 
       socket.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        
+        console.log("7. Received message from WebSocket:", data);
         if (data.error) {
           setError(data.error);
           setIsLoading(false);
@@ -128,17 +142,19 @@ function App() {
       };
 
       socket.onerror = (event) => {
-        console.error("WebSocket error:", event);
-        setError("A connection error occurred. Is the backend server running?");
+        console.error("!!! WebSocket error occurred:", event);
+        setError("A WebSocket connection error occurred. Check the console for details.");
         setIsLoading(false);
       };
 
       socket.onclose = () => {
+        console.log("8. WebSocket connection closed.");
         socketRef.current = null;
         if (isLoading) setIsLoading(false);
       };
 
     } catch (err) {
+      console.error("!!! ERROR CAUGHT IN handleProcess CATCH BLOCK !!!", err);
       setError(err.message);
       setIsLoading(false);
     }
@@ -204,7 +220,7 @@ function App() {
             onClick={handleDefaultTest}
             disabled={isLoading || isDemoLoading}
           >
-            {isDemoLoading ? 'Loading Demo...' : 'Load Default Test'}
+            {isDemoLoading ? 'Loading Demo...' : '🚀 Load Default Test'}
           </button>
         </div>
         
