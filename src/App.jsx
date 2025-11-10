@@ -9,6 +9,9 @@ import ProgressBar from './components/ProgressBar';
 
 import './App.css';
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+const WS_BASE_URL = API_BASE_URL.replace(/^http/, 'ws');
+
 function App() {
   const [midiFile, setMidiFile] = useState(null);
   const [palette, setPalette] = useState([]);
@@ -82,7 +85,7 @@ function App() {
     palette.forEach(sound => formData.append('sounds', sound.file));
 
     try {
-      const uploadResponse = await fetch('http://127.0.0.1:8000/api/upload', {
+      const uploadResponse = await fetch(`${API_BASE_URL}/api/upload`, {
         method: 'POST',
         body: formData,
       });
@@ -95,7 +98,7 @@ function App() {
       const uploadResult = await uploadResponse.json();
       const { jobId, midiFilename } = uploadResult;
 
-      const socket = new WebSocket('ws://127.0.0.1:8000/ws/process');
+      const socket = new WebSocket(`${WS_BASE_URL}/ws/process`);
       socketRef.current = socket;
 
       socket.onopen = () => {
@@ -116,7 +119,7 @@ function App() {
           setIsLoading(false);
           socket.close();
         } else if (data.resultUrl) {
-          setResults({ audioPreviewUrl: `http://127.0.0.1:8000${data.resultUrl}` });
+          setResults({ audioPreviewUrl: `${API_BASE_URL}${data.resultUrl}` });
           setIsLoading(false);
           socket.close();
         } else {
