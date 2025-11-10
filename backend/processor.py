@@ -6,14 +6,18 @@ import librosa
 import subprocess
 import shutil
 
-def analyze_sound(sound_path):
+def analyze_sound_fast(sound_path):
     try:
         y, sr = librosa.load(sound_path, res_type='kaiser_fast')
         duration_sec = librosa.get_duration(y=y, sr=sr)
-        pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
-        unwound_mag = np.unravel_index(np.argmax(magnitudes), magnitudes.shape)
-        pitch_hz = pitches[unwound_mag]
+
+        stft = np.abs(librosa.stft(y))
+        freqs = librosa.fft_frequencies(sr=sr)
+        peak_freq_bin = np.argmax(np.mean(stft, axis=1))
+        pitch_hz = freqs[peak_freq_bin]
+        
         if pitch_hz == 0: pitch_hz = 261.63
+
         return {"base_pitch_hz": pitch_hz, "base_duration_sec": duration_sec, "sr": sr}
     except Exception as e:
         print(f"Warning: Could not analyze sound {os.path.basename(sound_path)}. Error: {e}")
@@ -47,7 +51,7 @@ def run_processing(midi_file_path, config_data, sound_folder_path, progress_call
         available_sounds = []
         for i, sound_filename in enumerate(sound_files):
             sound_path = os.path.join(sound_folder_path, sound_filename)
-            analysis = analyze_sound(sound_path)
+            analysis = analyze_sound_fast(sound_path)
             available_sounds.append({"filename": sound_filename, "path": sound_path, **analysis})
             progress_callback({
                 "status": f"Analyzing sound {i+1}/{len(sound_files)}",
@@ -102,17 +106,12 @@ def run_processing(midi_file_path, config_data, sound_folder_path, progress_call
                 input_path = sound_data['path']
                 output_path = os.path.join(temp_notes_dir, f"note_{i}_sound_{sound_idx}.wav")
 
-                
                 command = [
-                    'ffmpeg',
-                    '-y',
-                    '-i', input_path,
+                    'ffmpeg', '-y', '-i', input_path,
                     '-af', f'asetrate={sound_data["sr"] * pitch_ratio},atempo={tempo_factor}',
-                    '-ar', str(sample_rate),
-                    '-ac', '1',  
+                    '-ar', str(sample_rate), '-ac', '1',
                     output_path
                 ]
-                
                 
                 subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
