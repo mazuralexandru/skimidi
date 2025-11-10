@@ -1,15 +1,12 @@
-# backend/processor.py
-
 import numpy as np
 import mido
 import os
 from scipy.io import wavfile
 import librosa
 
-# --- Helper functions (analyze_sound, midi_to_hz, find_best_sounds_for_note) remain exactly the same ---
 def analyze_sound(sound_path):
     try:
-        y, sr = librosa.load(sound_path)
+        y, sr = librosa.load(sound_path, res_type='kaiser_fast')
         duration_sec = librosa.get_duration(y=y, sr=sr)
         pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
         unwound_mag = np.unravel_index(np.argmax(magnitudes), magnitudes.shape)
@@ -34,19 +31,12 @@ def find_best_sounds_for_note(target_note, available_sounds, layering_config, pr
     num_layers_to_add = max_layers - len(chosen_sounds)
     chosen_sounds.extend(layer_candidates[:num_layers_to_add])
     return chosen_sounds
-# --- End of helper functions ---
-
 
 def run_processing(midi_file_path, config_data, sound_folder_path, progress_callback):
-    """
-    The processing function, now with a progress_callback.
-    """
     try:
-        # --- Configuration ---
         layering_config = config_data.get('layering', {"max_layers": 1})
         primary_sound_name = config_data.get('primarySoundName')
-        
-        # --- 1. Analyze all provided sounds ---
+
         progress_callback({"status": "Analyzing sound palette...", "percent": 0})
         sound_files = [f for f in os.listdir(sound_folder_path) if f.lower().endswith('.wav')]
         available_sounds = []
@@ -56,13 +46,12 @@ def run_processing(midi_file_path, config_data, sound_folder_path, progress_call
             available_sounds.append({"filename": sound_filename, "path": sound_path, **analysis})
             progress_callback({
                 "status": f"Analyzing sound {i+1}/{len(sound_files)}: {sound_filename}",
-                "percent": int(((i + 1) / len(sound_files)) * 15) # Analysis is ~15% of the work
+                "percent": int(((i + 1) / len(sound_files)) * 15)
             })
 
         if not primary_sound_name or not any(s['filename'] == primary_sound_name for s in available_sounds):
             primary_sound_name = available_sounds[0]['filename'] if available_sounds else None
 
-        # --- 2. Parse the MIDI file ---
         progress_callback({"status": "Parsing MIDI file...", "percent": 15})
         mid = mido.MidiFile(midi_file_path)
         parsed_notes = []
@@ -85,7 +74,6 @@ def run_processing(midi_file_path, config_data, sound_folder_path, progress_call
                         })
         parsed_notes.sort(key=lambda x: x['start_time'])
         
-        # --- 3. Process notes and render audio ---
         if not parsed_notes:
             raise ValueError("No notes found in MIDI file.")
 
@@ -97,14 +85,14 @@ def run_processing(midi_file_path, config_data, sound_folder_path, progress_call
         for i, note in enumerate(parsed_notes):
             progress_callback({
                 "status": f"Weaving note {i+1}/{total_notes}",
-                "percent": int(15 + ((i + 1) / total_notes) * 80) # Weaving is ~80% of the work
+                "percent": int(15 + ((i + 1) / total_notes) * 80)
             })
             chosen_sounds = find_best_sounds_for_note(note, available_sounds, layering_config, primary_sound_name)
             if not chosen_sounds: continue
             
             num_layers = len(chosen_sounds) - 1
             for sound_data in chosen_sounds:
-                y, sr = librosa.load(sound_data['path'], sr=sample_rate)
+                y, sr = librosa.load(sound_data['path'], sr=sample_rate, res_type='kaiser_fast')
                 n_steps = librosa.hz_to_midi(note['pitch_hz']) - librosa.hz_to_midi(sound_data['base_pitch_hz'])
                 y_shifted = librosa.effects.pitch_shift(y, sr=sr, n_steps=n_steps)
                 current_duration = librosa.get_duration(y=y_shifted, sr=sr)
@@ -119,7 +107,6 @@ def run_processing(midi_file_path, config_data, sound_folder_path, progress_call
                     master_track.resize(end_sample, refcheck=False)
                 master_track[start_sample:end_sample] += y_final
 
-        # --- 4. Normalize and Export Final Audio ---
         progress_callback({"status": "Finalizing audio...", "percent": 95})
         max_amp = np.max(np.abs(master_track))
         if max_amp > 1.0:
@@ -135,6 +122,5 @@ def run_processing(midi_file_path, config_data, sound_folder_path, progress_call
         
         return output_dir
     except Exception as e:
-        # Send a final error message through the callback
         progress_callback({"error": str(e)})
         return None
