@@ -1,8 +1,12 @@
+# backend/processor.py
+
 import numpy as np
 import mido
 import os
 from scipy.io import wavfile
 import librosa
+import subprocess
+import shutil 
 
 def analyze_sound(sound_path):
     try:
@@ -12,10 +16,10 @@ def analyze_sound(sound_path):
         unwound_mag = np.unravel_index(np.argmax(magnitudes), magnitudes.shape)
         pitch_hz = pitches[unwound_mag]
         if pitch_hz == 0: pitch_hz = 261.63
-        return {"base_pitch_hz": pitch_hz, "base_duration_sec": duration_sec}
+        return {"base_pitch_hz": pitch_hz, "base_duration_sec": duration_sec, "sr": sr}
     except Exception as e:
         print(f"Warning: Could not analyze sound {os.path.basename(sound_path)}. Error: {e}")
-        return {"base_pitch_hz": 261.63, "base_duration_sec": 1.0}
+        return {"base_pitch_hz": 261.63, "base_duration_sec": 1.0, "sr": 22050}
 
 def midi_to_hz(note_number):
     return librosa.midi_to_hz(note_number)
@@ -33,10 +37,13 @@ def find_best_sounds_for_note(target_note, available_sounds, layering_config, pr
     return chosen_sounds
 
 def run_processing(midi_file_path, config_data, sound_folder_path, progress_callback):
+    temp_notes_dir = os.path.join(os.path.dirname(sound_folder_path), "temp_notes")
+    os.makedirs(temp_notes_dir, exist_ok=True)
+
     try:
         layering_config = config_data.get('layering', {"max_layers": 1})
         primary_sound_name = config_data.get('primarySoundName')
-
+        
         progress_callback({"status": "Analyzing sound palette...", "percent": 0})
         sound_files = [f for f in os.listdir(sound_folder_path) if f.lower().endswith('.wav')]
         available_sounds = []
@@ -45,10 +52,9 @@ def run_processing(midi_file_path, config_data, sound_folder_path, progress_call
             analysis = analyze_sound(sound_path)
             available_sounds.append({"filename": sound_filename, "path": sound_path, **analysis})
             progress_callback({
-                "status": f"Analyzing sound {i+1}/{len(sound_files)}: {sound_filename}",
+                "status": f"Analyzing sound {i+1}/{len(sound_files)}",
                 "percent": int(((i + 1) / len(sound_files)) * 15)
             })
-
         if not primary_sound_name or not any(s['filename'] == primary_sound_name for s in available_sounds):
             primary_sound_name = available_sounds[0]['filename'] if available_sounds else None
 
@@ -91,16 +97,34 @@ def run_processing(midi_file_path, config_data, sound_folder_path, progress_call
             if not chosen_sounds: continue
             
             num_layers = len(chosen_sounds) - 1
-            for sound_data in chosen_sounds:
-                y, sr = librosa.load(sound_data['path'], sr=sample_rate, res_type='kaiser_fast')
-                n_steps = librosa.hz_to_midi(note['pitch_hz']) - librosa.hz_to_midi(sound_data['base_pitch_hz'])
-                y_shifted = librosa.effects.pitch_shift(y, sr=sr, n_steps=n_steps)
-                current_duration = librosa.get_duration(y=y_shifted, sr=sr)
-                stretch_factor = current_duration / note['duration_sec'] if note['duration_sec'] > 0 else 1
-                y_stretched = librosa.effects.time_stretch(y_shifted, rate=stretch_factor)
+            for sound_idx, sound_data in enumerate(chosen_sounds):
+                
+                pitch_ratio = note['pitch_hz'] / sound_data['base_pitch_hz']
+                duration_ratio = sound_data['base_duration_sec'] / note['duration_sec'] if note['duration_sec'] > 0 else 1
+                
+                tempo_factor = duration_ratio * pitch_ratio
+
+                input_path = sound_data['path']
+                output_path = os.path.join(temp_notes_dir, f"note_{i}_sound_{sound_idx}.wav")
+
+                command = [
+                    'ffmpeg',
+                    '-y',  
+                    '-i', input_path,
+                    '-af', f'asetrate={sound_data["sr"] * pitch_ratio},atempo={tempo_factor}',
+                    '-ar', str(sample_rate),
+                    output_path
+                ]
+                
+                subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                sr, note_audio = wavfile.read(output_path)
+                note_audio_float = note_audio.astype(np.float32) / 32767.0
+                
                 is_primary = sound_data['filename'] == primary_sound_name
                 volume = note['velocity'] * (1.0 if is_primary else (0.7 / num_layers if num_layers > 0 else 0.7))
-                y_final = y_stretched * volume
+                y_final = note_audio_float * volume
+
                 start_sample = int(note['start_time'] * sample_rate)
                 end_sample = start_sample + len(y_final)
                 if end_sample > len(master_track):
@@ -124,3 +148,6 @@ def run_processing(midi_file_path, config_data, sound_folder_path, progress_call
     except Exception as e:
         progress_callback({"error": str(e)})
         return None
+    finally:
+        if os.path.exists(temp_notes_dir):
+            shutil.rmtree(temp_notes_dir)
