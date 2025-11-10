@@ -1,5 +1,3 @@
-# backend/main.py
-
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -12,8 +10,10 @@ import asyncio
 
 app = FastAPI()
 
-# --- CORS MIDDLEWARE ---
-origins = ["http://localhost:5173"]
+origins = [
+    "http://localhost:5173",
+    "https://skimidi.netlify.app/"  
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
