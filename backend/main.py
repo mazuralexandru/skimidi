@@ -8,11 +8,13 @@ from typing import List
 from processor import run_processing
 import asyncio
 
+os.makedirs("results", exist_ok=True)
+os.makedirs("temp_processing", exist_ok=True)
+
 app = FastAPI()
 
 origins = [
     "http://localhost:5173",
-    "https://skimidi.netlify.app/"  
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -28,7 +30,6 @@ app.mount("/results", StaticFiles(directory="results"), name="results")
 def read_root():
     return {"message": "Skimidi API is running!"}
 
-# NEW ENDPOINT: Handles file uploads and creates a job
 @app.post("/api/upload")
 async def upload_files(
     midi: UploadFile = File(...), 
@@ -39,12 +40,10 @@ async def upload_files(
     sound_folder_path = os.path.join(job_folder, "sounds")
     os.makedirs(sound_folder_path, exist_ok=True)
 
-    # Save MIDI
     midi_path = os.path.join(job_folder, midi.filename)
     with open(midi_path, "wb") as f:
         f.write(await midi.read())
 
-    # Save Sounds
     for sound_file in sounds:
         sound_path = os.path.join(sound_folder_path, sound_file.filename)
         with open(sound_path, "wb") as f:
@@ -52,12 +51,10 @@ async def upload_files(
             
     return {"jobId": job_id, "midiFilename": midi.filename}
 
-# NEW WEBSOCKET ENDPOINT: Handles the processing job
 @app.websocket("/ws/process")
 async def websocket_process(websocket: WebSocket):
     await websocket.accept()
     try:
-        # Wait for the initial message from the client
         message = await websocket.receive_json()
         job_id = message.get("jobId")
         config_data = message.get("config")
@@ -71,14 +68,12 @@ async def websocket_process(websocket: WebSocket):
         midi_path = os.path.join(job_folder, midi_filename)
         sound_folder_path = os.path.join(job_folder, "sounds")
 
-        # Define the callback function to send progress over the websocket
         async def send_progress(progress_data):
             await websocket.send_json(progress_data)
 
-        # Run the synchronous, CPU-bound processing in a thread pool
         loop = asyncio.get_event_loop()
         output_dir = await loop.run_in_executor(
-            None,  # Use the default thread pool
+            None,
             run_processing,
             midi_path,
             config_data,
@@ -91,9 +86,6 @@ async def websocket_process(websocket: WebSocket):
             output_filename = f"{base_name}_output.wav"
             relative_preview_path = os.path.join("results", base_name, output_filename)
             await websocket.send_json({"resultUrl": f"/{relative_preview_path}"})
-        else:
-            # The error is already sent by the callback in run_processing
-            pass
 
     except WebSocketDisconnect:
         print(f"Client disconnected.")
