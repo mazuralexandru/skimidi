@@ -13,15 +13,12 @@ os.makedirs("temp_processing", exist_ok=True)
 
 app = FastAPI()
 
-origins = [
-    "http://localhost:5173",
-    "https://skimidi.netlify.app" 
-]
+origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
+    allow_credentials=True,  
     allow_methods=["*"],
     allow_headers=["*"],
 )
